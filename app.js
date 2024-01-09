@@ -1,13 +1,17 @@
 const express = require("express");
 const fetch = require("node-fetch");
 const path = require("path");
+const cors = require("cors");
 const gTTS = require("gtts");
-const port = 3001;
 const bodyParser = require("body-parser");
-const app = express();
-const BASE_AUDIO_PATH = "./public/audio/";
 
-const { uploadAudio } = require("./configS3");
+const app = express();
+
+const { uploadAudio, checkAudioExistence } = require("./configS3");
+
+const port = 3001;
+
+app.use(cors());
 
 app.use(express.static(path.join(__dirname, "public")));
 
@@ -19,12 +23,6 @@ app.use(
   })
 );
 
-app.get("/", (request, response) => {
-  response.send({
-    message: "Node.js and Express REST API",
-  });
-});
-
 app.post("/crawler", (request, response) => {
   try {
     response.send({
@@ -32,39 +30,60 @@ app.post("/crawler", (request, response) => {
     });
     uuid = request.body.uuid;
     text = request.body.text;
-    createAudio(uuid, text);
+    createAudioVietnamese(uuid, text);
   } catch (e) {
     console.log({ errror: e });
   }
 });
 
-app.post("/demo/saveS3", (request, response) => {
+app.post("/convert-audio-vi-to-en", async (request, response) => {
   try {
-    response.send({
-      message: "Creating audio",
-    });
     uuid = request.body.uuid;
     text = request.body.text;
-    createAudio(uuid, text);
+    const msg = await createAudioEnglish(uuid, text);
+    console.log({ msg });
+    response.send({ msg });
   } catch (e) {
-    console.log({ errror: e });
+    console.log({ error: e, uuid });
   }
 });
 
-async function createAudio(uuid, text) {
-  var gtts = new gTTS(text, "vi");
+app.post("/check-exist-audio-S3", async (request, response) => {
+  try {
+    uuid = request.body.uuid;
+    const res = await checkAudioExistence(uuid);
+    response.send({ uuid, isExisted: res });
+  } catch (e) {
+    console.log({ error: e, uuid });
+  }
+});
+
+async function createAudioVietnamese(uuid, text) {
   try {
     const gtts = new gTTS(text, "vi");
-    const audioStream = await gtts.stream();
-
-    msg = { uuid: uuid, status: "AUDIO_CRAWLING_SUCCESS" };
-
+    const audioStream = gtts.stream();
     const fileName = `${uuid}.mp3`;
-    const bucketName = "graduation-project-api";
-    await uploadAudio(fileName, bucketName, audioStream);
+    const result = await uploadAudio(fileName, audioStream);
+    console.log({ uuid: result?.key });
+    msg = { uuid: uuid, status: "AUDIO_CRAWLING_SUCCESS" };
     sendResult(msg);
   } catch (error) {
     msg = { uuid: uuid, status: "AUDIO_CRAWLING_FAILED" };
+    throw new Error(error);
+  }
+}
+
+async function createAudioEnglish(uuid, text) {
+  try {
+    const gtts = new gTTS(text, "en");
+    const audioStream = await gtts.stream();
+    const fileName = `${uuid}_en.mp3`;
+    const result = await uploadAudio(fileName, audioStream);
+    console.log({ uuid: result?.key });
+    msg = { uuid: result?.key, status: "CONVERT-AUDIO-EN-SUCCESS" };
+    return msg;
+  } catch (error) {
+    msg = { uuid: uuid, status: "CONVERT-AUDIO-EN-FAIL" };
     throw new Error(error);
   }
 }
@@ -86,6 +105,10 @@ async function sendResult(message) {
     .catch((err) => {
       console.log("Error: ", err);
     });
+}
+
+async function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Start the server
